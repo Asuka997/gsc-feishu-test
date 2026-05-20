@@ -1,0 +1,83 @@
+name: Sync GSC weekly data to Feishu
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC. 16:00 UTC is 24:00 in Asia/Shanghai.
+    - cron: "0 16 * * *"
+  workflow_dispatch:
+    inputs:
+      month:
+        description: "Month to sync, for example 2026-05. Empty means current month."
+        required: false
+        type: string
+      through:
+        description: "Last date to include, for example 2026-05-20. Empty means today/current month end."
+        required: false
+        type: string
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      PYTHONIOENCODING: utf-8
+      GSC_SITE_URL: ${{ secrets.GSC_SITE_URL }}
+      GOOGLE_TOKEN_FILE: .secrets/gsc_token.json
+      FEISHU_APP_ID: ${{ secrets.FEISHU_APP_ID }}
+      FEISHU_APP_SECRET: ${{ secrets.FEISHU_APP_SECRET }}
+      FEISHU_APP_TOKEN: ${{ secrets.FEISHU_APP_TOKEN }}
+      FEISHU_TABLE_ID: ${{ secrets.FEISHU_TABLE_ID }}
+      INPUT_MONTH: ${{ inputs.month }}
+      INPUT_THROUGH: ${{ inputs.through }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Write Google token
+        env:
+          GOOGLE_TOKEN_JSON: ${{ secrets.GOOGLE_TOKEN_JSON }}
+        run: |
+          mkdir -p .secrets
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          token = os.environ["GOOGLE_TOKEN_JSON"]
+          parsed = json.loads(token)
+          Path(".secrets/gsc_token.json").write_text(
+              json.dumps(parsed, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Sync data
+        run: |
+          mkdir -p exports
+          args=()
+          if [ -n "$INPUT_MONTH" ]; then
+            args+=(--month "$INPUT_MONTH")
+          fi
+          if [ -n "$INPUT_THROUGH" ]; then
+            args+=(--through "$INPUT_THROUGH")
+          fi
+          python sync_gsc_weekly_to_feishu.py "${args[@]}" --output exports/gsc_weekly_latest.json
+
+      - name: Upload latest export
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gsc-weekly-export
+          path: exports/gsc_weekly_latest.json
+          if-no-files-found: ignore
